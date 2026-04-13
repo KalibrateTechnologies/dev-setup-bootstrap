@@ -22,7 +22,6 @@ $ErrorActionPreference = 'Stop'
 
 $ScriptUrl = 'https://raw.githubusercontent.com/KalibrateTechnologies/dev-setup-bootstrap/main/bootstrap.ps1'
 $TmpScript = "$env:TEMP\dev-setup-bootstrap.ps1"
-$Pwsh7Path = 'C:\Program Files\PowerShell\7\pwsh.exe'
 
 # Build switch-forwarding string. Called at script scope so $PSBoundParameters is the script's.
 $switchArgs = ''
@@ -30,6 +29,22 @@ foreach ($k in $PSBoundParameters.Keys) {
     if ($PSBoundParameters[$k] -is [switch] -and $PSBoundParameters[$k].IsPresent) {
         $switchArgs += " -$k"
     }
+}
+
+function Find-Pwsh7 {
+    # Refresh PATH first so a just-installed pwsh is discoverable
+    $env:Path = [System.Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' +
+                [System.Environment]::GetEnvironmentVariable('Path', 'User')
+
+    # Try PATH first (covers both MSI and MSIX installs)
+    $cmd = Get-Command pwsh -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
+
+    # Fallback: known MSI install path
+    $msi = 'C:\Program Files\PowerShell\7\pwsh.exe'
+    if (Test-Path $msi) { return $msi }
+
+    return $null
 }
 
 # -- STEP 1: Self-elevate -------------------------------------------------------
@@ -52,29 +67,28 @@ Write-Host ''
 
 if ($PSVersionTable.PSVersion.Major -lt 7) {
 
-    if (-not (Test-Path $Pwsh7Path)) {
+    $pwsh7 = Find-Pwsh7
+
+    if (-not $pwsh7) {
         Write-Host '  Installing PowerShell 7...' -NoNewline
-        winget install --id Microsoft.PowerShell --silent --accept-package-agreements --accept-source-agreements | Out-Null
-        if (Test-Path $Pwsh7Path) {
+        winget install --id Microsoft.PowerShell --silent --accept-package-agreements --accept-source-agreements
+        $pwsh7 = Find-Pwsh7
+        if ($pwsh7) {
             Write-Host ' done' -ForegroundColor Green
         } else {
-            Write-Host ' not found at expected path after install' -ForegroundColor Yellow
+            Write-Host ' FAILED (not found on PATH after install)' -ForegroundColor Red
+            Write-Host '  Install PowerShell 7 manually from https://aka.ms/powershell then re-run.' -ForegroundColor Red
+            exit 1
         }
     } else {
         Write-Host '  PowerShell 7: already installed' -ForegroundColor DarkGray
     }
 
-    if (Test-Path $Pwsh7Path) {
-        Write-Host '  Re-launching in PowerShell 7...' -ForegroundColor Cyan
-        # Already elevated -- child inherits the elevated token, no -Verb RunAs needed.
-        # $PSCommandPath is the temp file we're running from (set because we used -File above).
-        Start-Process $Pwsh7Path -ArgumentList "-ExecutionPolicy Bypass -File `"$PSCommandPath`"$switchArgs" -Wait
-        exit
-    }
-
-    Write-Host ''
-    Write-Host '  WARNING: Could not install PowerShell 7. setup.ps1 requires PS7.' -ForegroundColor Yellow
-    Write-Host '  Continuing in PS5 -- errors are likely.' -ForegroundColor Yellow
+    Write-Host '  Re-launching in PowerShell 7...' -ForegroundColor Cyan
+    # Already elevated -- child inherits the elevated token, no -Verb RunAs needed.
+    # $PSCommandPath is the temp file we're running from (set because we used -File above).
+    Start-Process $pwsh7 -ArgumentList "-ExecutionPolicy Bypass -File `"$PSCommandPath`"$switchArgs" -Wait
+    exit
 }
 
 # -- STEP 3: Token (now running in PS7 -- normal console, Read-Host works fine) -
