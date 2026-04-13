@@ -1,5 +1,4 @@
 param(
-    [string]$Token        = '',
     [switch]$SkipPackages,
     [switch]$SkipNetFx,
     [switch]$SkipDotNetWorkloads,
@@ -11,8 +10,12 @@ param(
     [switch]$IncludeVS
 )
 # !! PS5.1 COMPATIBLE !! -- no ?., no &&/||, no ternary ?:
-# This script runs on a stock Windows 11 machine where only PS5.1 is installed.
-# It installs PS7 and re-launches itself in pwsh before calling setup.ps1.
+# Flow:
+#   1. Unelevated PS5 (irm|iex)  -> download to temp file, UAC elevate
+#   2. Elevated PS5               -> install PS7, re-launch in pwsh
+#   3. Elevated PS7               -> prompt for token, install git, clone, run setup.ps1
+#
+# Token is NOT collected until step 3 -- no need to forward it across re-launches.
 
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -21,61 +24,73 @@ $ScriptUrl = 'https://raw.githubusercontent.com/KalibrateTechnologies/dev-setup-
 $TmpScript = "$env:TEMP\dev-setup-bootstrap.ps1"
 $Pwsh7Path = 'C:\Program Files\PowerShell\7\pwsh.exe'
 
-function Build-ArgList {
-    $out = ''
-    if ($Token) { $out += " -Token `"$Token`"" }
-    foreach ($k in $PSBoundParameters.Keys) {
-        if ($k -ne 'Token' -and $PSBoundParameters[$k] -is [switch] -and $PSBoundParameters[$k].IsPresent) {
-            $out += " -$k"
-        }
+# Build switch-forwarding string. Called at script scope so $PSBoundParameters is the script's.
+$switchArgs = ''
+foreach ($k in $PSBoundParameters.Keys) {
+    if ($PSBoundParameters[$k] -is [switch] -and $PSBoundParameters[$k].IsPresent) {
+        $switchArgs += " -$k"
     }
-    return $out
 }
 
-function Download-Bootstrap {
-    Invoke-WebRequest -Uri $ScriptUrl -UseBasicParsing -OutFile $TmpScript
-}
-
-# STEP 1: Self-elevate
-# Run unelevated (normal PS window) -- script self-elevates via UAC.
-# Token is collected before UAC because the elevated child cannot use stdin.
+# -- STEP 1: Self-elevate -------------------------------------------------------
+# irm|iex runs the script in-memory so $PSCommandPath is empty here.
+# Download to a real temp file first so UAC child can reference it with -File.
 
 $me = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
 if (-not $me.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-
-    if (-not $Token) {
-        Write-Host ''
-        Write-Host '  A GitHub access token is needed to clone the setup repo.' -ForegroundColor Cyan
-        Write-Host '  Opening your browser...' -ForegroundColor Cyan
-        Start-Process 'https://github.com/settings/tokens/new?scopes=repo&description=Dev+Setup+Bootstrap'
-        Write-Host ''
-        Write-Host '  Set an expiry, leave "repo" ticked, click Generate token, copy it.' -ForegroundColor Cyan
-        $Token = (Read-Host '  Paste token here').Trim()
-    }
-
-    Download-Bootstrap
+    Invoke-WebRequest -Uri $ScriptUrl -UseBasicParsing -OutFile $TmpScript
     # Always use powershell.exe here -- pwsh may not be installed yet on a new machine
-    $argList = "-ExecutionPolicy Bypass -File `"$TmpScript`"$(Build-ArgList)"
-    Start-Process powershell.exe -Verb RunAs -ArgumentList $argList
+    Start-Process powershell.exe -Verb RunAs -ArgumentList "-ExecutionPolicy Bypass -File `"$TmpScript`"$switchArgs"
     exit
 }
 
-# STEP 2: Token (elevated -- prompt if not forwarded from step 1)
+# -- STEP 2: Install PS7 and re-launch in it (still in elevated PS5) ------------
+
+Write-Host ''
+Write-Host '  Setting up prerequisites...' -ForegroundColor Cyan
+Write-Host ''
+
+if ($PSVersionTable.PSVersion.Major -lt 7) {
+
+    if (-not (Test-Path $Pwsh7Path)) {
+        Write-Host '  Installing PowerShell 7...' -NoNewline
+        winget install --id Microsoft.PowerShell --silent --accept-package-agreements --accept-source-agreements | Out-Null
+        if (Test-Path $Pwsh7Path) {
+            Write-Host ' done' -ForegroundColor Green
+        } else {
+            Write-Host ' not found at expected path after install' -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host '  PowerShell 7: already installed' -ForegroundColor DarkGray
+    }
+
+    if (Test-Path $Pwsh7Path) {
+        Write-Host '  Re-launching in PowerShell 7...' -ForegroundColor Cyan
+        # Already elevated -- child inherits the elevated token, no -Verb RunAs needed.
+        # $PSCommandPath is the temp file we're running from (set because we used -File above).
+        Start-Process $Pwsh7Path -ArgumentList "-ExecutionPolicy Bypass -File `"$PSCommandPath`"$switchArgs" -Wait
+        exit
+    }
+
+    Write-Host ''
+    Write-Host '  WARNING: Could not install PowerShell 7. setup.ps1 requires PS7.' -ForegroundColor Yellow
+    Write-Host '  Continuing in PS5 -- errors are likely.' -ForegroundColor Yellow
+}
+
+# -- STEP 3: Token (now running in PS7 -- normal console, Read-Host works fine) -
 
 Write-Host ''
 Write-Host '  Dev environment setup' -ForegroundColor Cyan
 Write-Host ''
 
-if (-not $Token) {
-    Write-Host '  A GitHub access token is needed to clone the setup repo.' -ForegroundColor Cyan
-    Write-Host '  Opening your browser...' -ForegroundColor Cyan
-    Start-Process 'https://github.com/settings/tokens/new?scopes=repo&description=Dev+Setup+Bootstrap'
-    Write-Host ''
-    Write-Host '  Set an expiry, leave "repo" ticked, click Generate token, copy it.' -ForegroundColor Cyan
-    $Token = (Read-Host '  Paste token here').Trim()
-}
+Write-Host '  A GitHub access token is needed to clone the setup repo.' -ForegroundColor Cyan
+Write-Host '  Opening your browser...' -ForegroundColor Cyan
+Start-Process 'https://github.com/settings/tokens/new?scopes=repo&description=Dev+Setup+Bootstrap'
+Write-Host ''
+Write-Host '  Set an expiry, leave "repo" ticked, click Generate token, copy it.' -ForegroundColor Cyan
+$Token = (Read-Host '  Paste token here').Trim()
 
-# STEP 3: Install git
+# -- STEP 4: Install git --------------------------------------------------------
 
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
     Write-Host '  Installing git...' -NoNewline
@@ -93,37 +108,7 @@ if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
     Write-Host '  git: already installed' -ForegroundColor DarkGray
 }
 
-# STEP 4: Install PS7 and re-launch in it
-# setup.ps1 requires PS7. On a stock Win11 machine only PS5.1 exists.
-# We install PS7 here, then re-launch this script in pwsh so setup.ps1 gets PS7.
-# NOTE: no ?. operator -- use Test-Path on the known default install path.
-
-if ($PSVersionTable.PSVersion.Major -lt 7) {
-
-    if (-not (Test-Path $Pwsh7Path)) {
-        Write-Host '  Installing PowerShell 7...' -NoNewline
-        winget install --id Microsoft.PowerShell --silent --accept-package-agreements --accept-source-agreements | Out-Null
-        $env:Path = [System.Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' +
-                    [System.Environment]::GetEnvironmentVariable('Path', 'User')
-        if (Test-Path $Pwsh7Path) {
-            Write-Host ' done' -ForegroundColor Green
-        } else {
-            Write-Host ' WARNING: pwsh not found at expected path, continuing in PS5' -ForegroundColor Yellow
-        }
-    } else {
-        Write-Host '  PowerShell 7: already installed' -ForegroundColor DarkGray
-    }
-
-    if (Test-Path $Pwsh7Path) {
-        Write-Host '  Re-launching in PowerShell 7...' -ForegroundColor Cyan
-        Download-Bootstrap
-        $argList = "-ExecutionPolicy Bypass -File `"$TmpScript`"$(Build-ArgList)"
-        Start-Process $Pwsh7Path -Verb RunAs -ArgumentList $argList -Wait
-        exit
-    }
-}
-
-# STEP 5: Clone
+# -- STEP 5: Clone --------------------------------------------------------------
 
 $repoPath = 'C:\dev-setup'
 $cleanUrl = 'https://github.com/KalibrateTechnologies/dev-setup.git'
@@ -140,13 +125,13 @@ if (Test-Path (Join-Path $repoPath '.git')) {
     Write-Host ' done' -ForegroundColor Green
 }
 
-# STEP 6: Run setup
+# -- STEP 6: Run setup ----------------------------------------------------------
 
 Set-ExecutionPolicy Bypass -Scope Process -Force
 
 $setupArgs = @{}
 foreach ($k in $PSBoundParameters.Keys) {
-    if ($k -ne 'Token') { $setupArgs[$k] = $PSBoundParameters[$k] }
+    $setupArgs[$k] = $PSBoundParameters[$k]
 }
 
 & (Join-Path $repoPath 'setup.ps1') @setupArgs
