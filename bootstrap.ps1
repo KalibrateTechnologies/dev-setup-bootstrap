@@ -425,6 +425,11 @@ Write-Host '  Set an expiry, leave "repo" ticked, click Generate token, copy it.
 $Token = (Read-Host '  Paste token here').Trim()
 
 $authUrl  = "https://oauth2:$Token@github.com/KalibrateTechnologies/dev-setup.git"
+$ghTokenFile = Join-Path $env:ProgramData ("dev-setup\\bootstrap-gh-token-" + [guid]::NewGuid().ToString('N') + '.txt')
+if (-not (Test-Path (Split-Path $ghTokenFile -Parent))) {
+    New-Item -Path (Split-Path $ghTokenFile -Parent) -ItemType Directory -Force | Out-Null
+}
+Set-Content -Path $ghTokenFile -Value $Token -Encoding ASCII
 
 if (Test-Path (Join-Path $repoPath '.git')) {
     Write-Host '  Repo already cloned - pulling latest...' -NoNewline
@@ -450,4 +455,11 @@ else {
     Write-Host ' done' -ForegroundColor Green
 }
 
-Start-Process powershell.exe -Verb RunAs -ArgumentList "-NoExit -ExecutionPolicy Bypass -File `"$TmpScript`" -BootstrapRunSetup -RepoPathOverride `"$repoPath`"$switchArgs"
+$pwsh7 = Find-Pwsh7
+if (-not $pwsh7) {
+    Write-Host ' FAILED' -ForegroundColor Red
+    Write-Host '  PowerShell 7 not found to continue setup after repo clone.' -ForegroundColor Red
+    exit 1
+}
+
+Start-Process $pwsh7 -Verb RunAs -ArgumentList "-NoExit -ExecutionPolicy Bypass -File `"$repoPath\setup.ps1`" -BootstrapGhTokenFile `"$ghTokenFile`"$switchArgs"
