@@ -23,6 +23,18 @@ $ErrorActionPreference = 'Stop'
 $ScriptUrl = 'https://raw.githubusercontent.com/KalibrateTechnologies/dev-setup-bootstrap/main/bootstrap.ps1'
 $TmpScript = "$env:TEMP\dev-setup-bootstrap.ps1"
 
+function Start-BootstrapTranscript {
+    $logDir = Join-Path $env:ProgramData 'dev-setup\logs'
+    if (-not (Test-Path $logDir)) {
+        New-Item -Path $logDir -ItemType Directory -Force | Out-Null
+    }
+
+    $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $logPath = Join-Path $logDir "bootstrap-$stamp.log"
+    Start-Transcript -Path $logPath -Append | Out-Null
+    Write-Host "  Transcript: $logPath" -ForegroundColor DarkGray
+}
+
 # Build switch-forwarding string. Called at script scope so $PSBoundParameters is the script's.
 $switchArgs = ''
 foreach ($k in $PSBoundParameters.Keys) {
@@ -55,7 +67,7 @@ $me = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]:
 if (-not $me.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     Invoke-WebRequest -Uri $ScriptUrl -UseBasicParsing -OutFile $TmpScript
     # Always use powershell.exe here -- pwsh may not be installed yet on a new machine
-    Start-Process powershell.exe -Verb RunAs -ArgumentList "-ExecutionPolicy Bypass -File `"$TmpScript`"$switchArgs"
+    Start-Process powershell.exe -Verb RunAs -ArgumentList "-NoExit -ExecutionPolicy Bypass -File `"$TmpScript`"$switchArgs"
     exit
 }
 
@@ -87,8 +99,8 @@ if ($PSVersionTable.PSVersion.Major -lt 7) {
     Write-Host '  Re-launching in PowerShell 7...' -ForegroundColor Cyan
     # Already elevated -- child inherits the elevated token, no -Verb RunAs needed.
     # $PSCommandPath is the temp file we're running from (set because we used -File above).
-    Start-Process $pwsh7 -ArgumentList "-ExecutionPolicy Bypass -File `"$PSCommandPath`"$switchArgs" -Wait
-    exit
+    Start-Process $pwsh7 -ArgumentList "-NoExit -ExecutionPolicy Bypass -File `"$PSCommandPath`"$switchArgs" -Wait
+    return
 }
 
 # -- STEP 3: Token (now running in PS7 -- normal console, Read-Host works fine) -
@@ -96,6 +108,8 @@ if ($PSVersionTable.PSVersion.Major -lt 7) {
 Write-Host ''
 Write-Host '  Dev environment setup' -ForegroundColor Cyan
 Write-Host ''
+
+Start-BootstrapTranscript
 
 Write-Host '  A GitHub access token is needed to clone the setup repo.' -ForegroundColor Cyan
 Write-Host '  Opening your browser...' -ForegroundColor Cyan
