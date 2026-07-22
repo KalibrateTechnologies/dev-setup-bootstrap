@@ -93,7 +93,32 @@ function Invoke-Winget {
         exit 1
     }
 
-    & $wingetExe @Arguments
+    $output = & $wingetExe @Arguments 2>&1
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -ne 0) {
+        $outputText = ($output | Out-String)
+        if ($outputText -match '0x8a15000f|Failed when opening source|Data required by the source is missing|No packages were found among the working sources') {
+            Write-Host '  Repairing winget sources...' -ForegroundColor DarkGray
+            Repair-WingetSources
+            $output = & $wingetExe @Arguments 2>&1
+            $exitCode = $LASTEXITCODE
+        }
+    }
+
+    if ($exitCode -ne 0) {
+        $output | ForEach-Object { Write-Host "  $_" -ForegroundColor Yellow }
+        exit $exitCode
+    }
+
+    return $output
+}
+
+function Repair-WingetSources {
+    $wingetExe = Get-WingetPath
+    if (-not $wingetExe) { return }
+
+    & $wingetExe source reset --force | Out-Null
+    & $wingetExe source update | Out-Null
 }
 
 function Assert-Winget {
@@ -141,6 +166,7 @@ Write-Host '  Setting up prerequisites...' -ForegroundColor Cyan
 Write-Host ''
 
 Assert-Winget
+Repair-WingetSources
 
 if ($PSVersionTable.PSVersion.Major -lt 7) {
 
