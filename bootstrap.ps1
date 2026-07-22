@@ -332,8 +332,16 @@ $cleanUrl = 'https://github.com/KalibrateTechnologies/dev-setup.git'
 
 # irm|iex runs the script in-memory so $PSCommandPath is empty here.
 # Download to a real temp file first so child processes can reference it with -File.
-if (-not (Test-Path $TmpScript)) {
-    Invoke-WebRequest -Uri $ScriptUrl -UseBasicParsing -OutFile $TmpScript
+# Always refresh when we're the top-level entrypoint so users pick up latest changes;
+# skip re-download only when we ARE the cached copy (re-launched via -File $TmpScript).
+if ($PSCommandPath -ne $TmpScript) {
+    try {
+        Invoke-WebRequest -Uri $ScriptUrl -UseBasicParsing -OutFile $TmpScript -ErrorAction Stop
+    }
+    catch {
+        if (-not (Test-Path $TmpScript)) { throw }
+        Write-Host "  Could not refresh bootstrap from $ScriptUrl; using cached copy." -ForegroundColor Yellow
+    }
 }
 
 if ($BootstrapAdminPrereqs) {
@@ -462,4 +470,4 @@ if (-not $pwsh7) {
     exit 1
 }
 
-Start-Process $pwsh7 -Verb RunAs -ArgumentList "-NoExit -ExecutionPolicy Bypass -File `"$repoPath\setup.ps1`" -BootstrapGhTokenFile `"$ghTokenFile`"$switchArgs"
+Start-Process $pwsh7 -Verb RunAs -ArgumentList "-NoExit -ExecutionPolicy Bypass -File `"$repoPath\setup.ps1`" -BootstrapGhTokenFile `"$ghTokenFile`" -BauUser `"$env:USERDOMAIN\$env:USERNAME`"$switchArgs"
