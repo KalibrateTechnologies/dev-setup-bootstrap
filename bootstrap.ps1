@@ -192,6 +192,43 @@ function Install-PowerShell7Direct {
     }
 }
 
+function Install-GitDirect {
+    $repo = 'git-for-windows/git'
+    $apiUrl = "https://api.github.com/repos/$repo/releases/latest"
+    $headers = @{ 'User-Agent' = 'dev-setup-bootstrap' }
+    $release = Invoke-RestMethod -Uri $apiUrl -Headers $headers -ErrorAction Stop
+
+    $asset = $release.assets |
+        Where-Object { $_.name -match '^Git-.*-64-bit\.exe$' } |
+        Select-Object -First 1
+
+    if (-not $asset -or -not $asset.browser_download_url) {
+        Write-Host '  FAILED (could not locate the Git for Windows installer asset)' -ForegroundColor Red
+        exit 1
+    }
+
+    $exePath = Join-Path $env:TEMP $asset.name
+
+    try {
+        Write-Host "  Downloading Git installer ($($asset.name))..." -NoNewline
+        Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $exePath -UseBasicParsing -ErrorAction Stop
+        Write-Host ' done' -ForegroundColor Green
+
+        Write-Host '  Installing git...' -NoNewline
+        $proc = Start-Process $exePath -ArgumentList '/VERYSILENT /NORESTART /SUPPRESSMSGBOXES' -Wait -PassThru -NoNewWindow
+        if ($proc.ExitCode -eq 0) {
+            Write-Host ' done' -ForegroundColor Green
+        }
+        else {
+            Write-Host " failed (exit code $($proc.ExitCode))" -ForegroundColor Red
+            exit $proc.ExitCode
+        }
+    }
+    finally {
+        Remove-Item $exePath -ErrorAction SilentlyContinue
+    }
+}
+
 # -- STEP 1: Self-elevate -------------------------------------------------------
 # irm|iex runs the script in-memory so $PSCommandPath is empty here.
 # Download to a real temp file first so UAC child can reference it with -File.
@@ -255,8 +292,7 @@ $Token = (Read-Host '  Paste token here').Trim()
 # -- STEP 4: Install git --------------------------------------------------------
 
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
-    Write-Host '  Installing git...' -NoNewline
-    Invoke-Winget @('install', '--source', 'winget', '--id', 'Git.Git', '--silent', '--accept-package-agreements', '--accept-source-agreements') | Out-Null
+    Install-GitDirect
     $env:Path = [System.Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' +
                 [System.Environment]::GetEnvironmentVariable('Path', 'User')
     if (Get-Command git -ErrorAction SilentlyContinue) {
