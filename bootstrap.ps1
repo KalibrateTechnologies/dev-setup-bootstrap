@@ -385,12 +385,16 @@ if ($BootstrapRunSetup) {
     Set-ExecutionPolicy Bypass -Scope Process -Force
     $setupArgs = @{}
     foreach ($k in $publicSwitches) {
+        if ($k -eq 'IncludeVS') { continue }
         if ($PSBoundParameters.ContainsKey($k)) {
             $setupArgs[$k] = $PSBoundParameters[$k]
         }
     }
+    # orchestrator.ps1 uses -SkipVS (opt-out); bootstrap exposes -IncludeVS (opt-in).
+    # Default = do not install Visual Studio unless caller explicitly opts in.
+    if (-not $IncludeVS) { $setupArgs['SkipVS'] = $true }
 
-    & (Join-Path $repoPath 'setup.ps1') @setupArgs
+    & (Join-Path $repoPath 'orchestrator.ps1') @setupArgs
     return
 }
 
@@ -470,4 +474,27 @@ if (-not $pwsh7) {
     exit 1
 }
 
-Start-Process $pwsh7 -Verb RunAs -ArgumentList "-NoExit -ExecutionPolicy Bypass -File `"$repoPath\setup.ps1`" -BootstrapGhTokenFile `"$ghTokenFile`" -BauUser `"$env:USERDOMAIN\$env:USERNAME`"$switchArgs"
+# Invoke orchestrator.ps1 non-elevated. It runs the admin phase (setup.ps1) via
+# UAC itself, then the BAU phase (bau-setup.ps1) in-process as the current
+# (BAU) user — the correct identity for writing to ~/.gitconfig, ~/.vscode,
+# ~/.azure, etc. on split-account machines.
+# orchestrator.ps1 exposes -SkipVS (opt-out); bootstrap exposes -IncludeVS
+# (opt-in). Translate here to preserve the "don't install VS by default"
+# behaviour of the bootstrap.
+$orchArgs = @(
+    '-NoLogo'
+    '-NoProfile'
+    '-ExecutionPolicy', 'Bypass'
+    '-File', "$repoPath\orchestrator.ps1"
+    '-BootstrapGhTokenFile', $ghTokenFile
+    '-BauUser', "$env:USERDOMAIN\$env:USERNAME"
+)
+foreach ($k in $publicSwitches) {
+    if ($k -eq 'IncludeVS') { continue }
+    if ($PSBoundParameters.ContainsKey($k) -and $PSBoundParameters[$k].IsPresent) {
+        $orchArgs += "-$k"
+    }
+}
+if (-not $IncludeVS) { $orchArgs += '-SkipVS' }
+
+& $pwsh7 @orchArgs
