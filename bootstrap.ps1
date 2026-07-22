@@ -95,15 +95,6 @@ function Invoke-Winget {
 
     $output = & $wingetExe @Arguments 2>&1
     $exitCode = $LASTEXITCODE
-    if ($exitCode -ne 0) {
-        $outputText = ($output | Out-String)
-        if ($outputText -match '0x8a15000f|Failed when opening source|Data required by the source is missing|No packages were found among the working sources') {
-            Write-Host '  Repairing winget sources...' -ForegroundColor DarkGray
-            Repair-WingetSources
-            $output = & $wingetExe @Arguments 2>&1
-            $exitCode = $LASTEXITCODE
-        }
-    }
 
     if ($exitCode -ne 0) {
         $output | ForEach-Object { Write-Host "  $_" -ForegroundColor Yellow }
@@ -113,13 +104,13 @@ function Invoke-Winget {
     return $output
 }
 
-function Repair-WingetSources {
-    $wingetExe = Get-WingetPath
-    if (-not $wingetExe) { return }
+function Disable-WingetMicrosoftStoreSource {
+    $policyKey = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppInstaller'
+    if (-not (Test-Path $policyKey)) {
+        New-Item -Path $policyKey -Force | Out-Null
+    }
 
-    & $wingetExe source reset --force --disable-interactivity | Out-Null
-    & $wingetExe source remove --name msstore --disable-interactivity | Out-Null
-    & $wingetExe source update --name winget --disable-interactivity | Out-Null
+    New-ItemProperty -Path $policyKey -Name 'EnableMicrosoftStoreSource' -Value 0 -PropertyType DWord -Force | Out-Null
 }
 
 function Assert-Winget {
@@ -167,7 +158,7 @@ Write-Host '  Setting up prerequisites...' -ForegroundColor Cyan
 Write-Host ''
 
 Assert-Winget
-Repair-WingetSources
+Disable-WingetMicrosoftStoreSource
 
 if ($PSVersionTable.PSVersion.Major -lt 7) {
 
