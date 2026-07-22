@@ -85,16 +85,28 @@ function Invoke-Winget {
     )
 
     $wingetExe = Get-WingetPath
-    if (-not $wingetExe) { Assert-Winget }
-    $wingetExe = Get-WingetPath
     if (-not $wingetExe) {
-        Write-Host '  FAILED (winget could not be located after installing App Installer)' -ForegroundColor Red
-        Write-Host '  Install App Installer from the Microsoft Store, then re-run.' -ForegroundColor Red
+        Repair-WinGetPackageManagerBootstrap
+        $wingetExe = Get-WingetPath
+    }
+    if (-not $wingetExe) {
+        Write-Host '  FAILED (winget could not be located after Repair-WinGetPackageManager)' -ForegroundColor Red
+        Write-Host '  Install App Installer manually, then re-run.' -ForegroundColor Red
         exit 1
     }
 
     $output = & $wingetExe @Arguments 2>&1
     $exitCode = $LASTEXITCODE
+
+    if ($exitCode -ne 0) {
+        $outputText = ($output | Out-String)
+        if ($outputText -match '0x8a15000f|Failed when opening source|Data required by the source is missing|No packages were found among the working sources') {
+            Write-Host '  Repairing winget via Microsoft.WinGet.Client...' -ForegroundColor DarkGray
+            Repair-WinGetPackageManagerBootstrap
+            $output = & $wingetExe @Arguments 2>&1
+            $exitCode = $LASTEXITCODE
+        }
+    }
 
     if ($exitCode -ne 0) {
         $output | ForEach-Object { Write-Host "  $_" -ForegroundColor Yellow }
@@ -104,37 +116,45 @@ function Invoke-Winget {
     return $output
 }
 
-function Disable-WingetMicrosoftStoreSource {
-    $policyKey = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppInstaller'
-    if (-not (Test-Path $policyKey)) {
-        New-Item -Path $policyKey -Force | Out-Null
+function Install-NuGetProvider {
+    if (Get-PackageProvider -Name 'NuGet' -ErrorAction SilentlyContinue) {
+        return
     }
 
-    New-ItemProperty -Path $policyKey -Name 'EnableMicrosoftStoreSource' -Value 0 -PropertyType DWord -Force | Out-Null
+    Install-PackageProvider -Name 'NuGet' -Force -Confirm:$false -ErrorAction Stop | Out-Null
 }
 
-function Assert-Winget {
-    if (Get-WingetPath) { return }
+function Install-WinGetClientModule {
+    $module = Get-Module -Name 'Microsoft.WinGet.Client' -ListAvailable -ErrorAction SilentlyContinue
+    if (-not $module) {
+        $gallery = Get-PSRepository -Name 'PSGallery' -ErrorAction SilentlyContinue
+        if ($gallery -and $gallery.InstallationPolicy -ne 'Trusted') {
+            Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted -ErrorAction Stop
+        }
 
-    # On some fresh machines / new admin profiles, the App Installer alias is not yet registered.
-    $appInstaller = Get-AppxPackage -Name Microsoft.DesktopAppInstaller -ErrorAction SilentlyContinue
-    if ($appInstaller) {
-        Add-AppxPackage -RegisterByFamilyName -MainPackage Microsoft.DesktopAppInstaller_8wekyb3d8bbwe -ErrorAction SilentlyContinue
+        Install-Module -Name 'Microsoft.WinGet.Client' -Scope AllUsers -Force -AllowClobber -ErrorAction Stop | Out-Null
     }
-    else {
-        $wingetTmp = Join-Path $env:TEMP 'Microsoft.DesktopAppInstaller.msixbundle'
-        try {
-            Invoke-WebRequest -Uri 'https://aka.ms/getwinget' -OutFile $wingetTmp -UseBasicParsing
-            Add-AppxPackage -Path $wingetTmp -ErrorAction SilentlyContinue
-        }
-        finally {
-            Remove-Item $wingetTmp -ErrorAction SilentlyContinue
-        }
+}
+
+function Repair-WinGetPackageManagerBootstrap {
+    Install-NuGetProvider
+    Install-WinGetClientModule
+    Import-Module 'Microsoft.WinGet.Client' -Force -ErrorAction Stop
+
+    $repairParams = @{ Force = $true; AllUsers = $true }
+    try {
+        Repair-WinGetPackageManager @repairParams -ErrorAction Stop | Out-Null
     }
+    catch {
+        Write-Host '  Winget repair reported an error; checking whether installation completed anyway...' -ForegroundColor DarkGray
+    }
+
+    Start-Sleep -Seconds 3
+    Refresh-Path
 
     if (-not (Get-WingetPath)) {
-        Write-Host '  FAILED (winget not available after refreshing App Installer)' -ForegroundColor Red
-        Write-Host '  Install App Installer from the Microsoft Store, then re-run.' -ForegroundColor Red
+        Write-Host '  FAILED (winget not available after Repair-WinGetPackageManager)' -ForegroundColor Red
+        Write-Host '  Install App Installer manually, then re-run.' -ForegroundColor Red
         exit 1
     }
 }
@@ -157,8 +177,7 @@ Write-Host ''
 Write-Host '  Setting up prerequisites...' -ForegroundColor Cyan
 Write-Host ''
 
-Assert-Winget
-Disable-WingetMicrosoftStoreSource
+Repair-WinGetPackageManagerBootstrap
 
 if ($PSVersionTable.PSVersion.Major -lt 7) {
 
