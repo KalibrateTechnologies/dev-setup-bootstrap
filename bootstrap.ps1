@@ -131,7 +131,7 @@ if (-not $me.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     Invoke-WebRequest -Uri $ScriptUrl -UseBasicParsing -OutFile $TmpScript
     # Always use powershell.exe here -- pwsh may not be installed yet on a new machine
     Start-Process powershell.exe -Verb RunAs -ArgumentList "-NoExit -ExecutionPolicy Bypass -File `"$TmpScript`"$switchArgs"
-    exit
+    return
 }
 
 # -- STEP 2: Install PS7 and re-launch in it (still in elevated PS5) ------------
@@ -148,7 +148,7 @@ if ($PSVersionTable.PSVersion.Major -lt 7) {
 
     if (-not $pwsh7) {
         Write-Host '  Installing PowerShell 7...' -NoNewline
-        Invoke-Winget @('install', '--id', 'Microsoft.PowerShell', '--silent', '--accept-package-agreements', '--accept-source-agreements')
+        Invoke-Winget @('install', '--source', 'winget', '--id', 'Microsoft.PowerShell', '--silent', '--accept-package-agreements', '--accept-source-agreements')
         $pwsh7 = Find-Pwsh7
         if ($pwsh7) {
             Write-Host ' done' -ForegroundColor Green
@@ -187,7 +187,7 @@ $Token = (Read-Host '  Paste token here').Trim()
 
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
     Write-Host '  Installing git...' -NoNewline
-    Invoke-Winget @('install', '--id', 'Git.Git', '--silent', '--accept-package-agreements', '--accept-source-agreements') | Out-Null
+    Invoke-Winget @('install', '--source', 'winget', '--id', 'Git.Git', '--silent', '--accept-package-agreements', '--accept-source-agreements') | Out-Null
     $env:Path = [System.Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' +
                 [System.Environment]::GetEnvironmentVariable('Path', 'User')
     if (Get-Command git -ErrorAction SilentlyContinue) {
