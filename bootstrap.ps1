@@ -117,8 +117,9 @@ function Repair-WingetSources {
     $wingetExe = Get-WingetPath
     if (-not $wingetExe) { return }
 
-    & $wingetExe source reset --force | Out-Null
-    & $wingetExe source update | Out-Null
+    & $wingetExe source reset --force --disable-interactivity | Out-Null
+    & $wingetExe source remove --name msstore --disable-interactivity | Out-Null
+    & $wingetExe source update --name winget --disable-interactivity | Out-Null
 }
 
 function Assert-Winget {
