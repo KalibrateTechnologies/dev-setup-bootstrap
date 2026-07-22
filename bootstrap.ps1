@@ -121,7 +121,7 @@ function Install-NuGetProvider {
         return
     }
 
-    Install-PackageProvider -Name 'NuGet' -Force -Confirm:$false -ErrorAction Stop | Out-Null
+    Install-PackageProvider -Name 'NuGet' -ForceBootstrap -Force -Confirm:$false -ErrorAction Stop | Out-Null
 }
 
 function Install-WinGetClientModule {
@@ -132,7 +132,7 @@ function Install-WinGetClientModule {
             Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted -ErrorAction Stop
         }
 
-        Install-Module -Name 'Microsoft.WinGet.Client' -Scope AllUsers -Force -AllowClobber -ErrorAction Stop | Out-Null
+        Install-Module -Name 'Microsoft.WinGet.Client' -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop | Out-Null
     }
 }
 
@@ -141,7 +141,7 @@ function Repair-WinGetPackageManagerBootstrap {
     Install-WinGetClientModule
     Import-Module 'Microsoft.WinGet.Client' -Force -ErrorAction Stop
 
-    $repairParams = @{ Force = $true; AllUsers = $true }
+    $repairParams = @{ Force = $true; Latest = $true }
     try {
         Repair-WinGetPackageManager @repairParams -ErrorAction Stop | Out-Null
     }
