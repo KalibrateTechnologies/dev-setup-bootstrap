@@ -71,7 +71,21 @@ function Assert-Winget {
     }
 
     # On some fresh machines / new admin profiles, the App Installer alias is not yet registered.
-    Add-AppxPackage -RegisterByFamilyName -MainPackage Microsoft.DesktopAppInstaller_8wekyb3d8bbwe -ErrorAction SilentlyContinue
+    $appInstaller = Get-AppxPackage -Name Microsoft.DesktopAppInstaller -ErrorAction SilentlyContinue
+    if ($appInstaller) {
+        Add-AppxPackage -RegisterByFamilyName -MainPackage Microsoft.DesktopAppInstaller_8wekyb3d8bbwe -ErrorAction SilentlyContinue
+    }
+    else {
+        $wingetTmp = Join-Path $env:TEMP 'Microsoft.DesktopAppInstaller.msixbundle'
+        try {
+            Invoke-WebRequest -Uri 'https://aka.ms/getwinget' -OutFile $wingetTmp -UseBasicParsing
+            Add-AppxPackage -Path $wingetTmp -ErrorAction SilentlyContinue
+        }
+        finally {
+            Remove-Item $wingetTmp -ErrorAction SilentlyContinue
+        }
+    }
+
     Refresh-Path
 
     if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
