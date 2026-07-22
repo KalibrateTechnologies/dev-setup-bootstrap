@@ -262,6 +262,46 @@ function Install-GitDirect {
     }
 }
 
+function Ensure-GitSafeDirectory {
+    param([Parameter(Mandatory = $true)][string]$RepoPath)
+
+    # Current user (covers non-elevated/manual git usage for this identity)
+    $globalSafe = git config --global --get-all safe.directory 2>$null
+    if (-not ($globalSafe | Where-Object { $_ -eq $RepoPath })) {
+        git config --global --add safe.directory $RepoPath 2>$null | Out-Null
+    }
+
+    # System-wide (covers other local users on the machine and avoids dubious ownership)
+    $systemSafe = git config --system --get-all safe.directory 2>$null
+    if (-not ($systemSafe | Where-Object { $_ -eq $RepoPath })) {
+        git config --system --add safe.directory $RepoPath 2>$null | Out-Null
+    }
+}
+
+function Update-RepoWithToken {
+    param(
+        [Parameter(Mandatory = $true)][string]$RepoPath,
+        [Parameter(Mandatory = $true)][string]$AuthUrl,
+        [Parameter(Mandatory = $true)][string]$CleanUrl
+    )
+
+    Ensure-GitSafeDirectory -RepoPath $RepoPath
+
+    # Use token-auth remote for this update to avoid browser/device login prompts,
+    # then immediately restore clean origin URL.
+    git -C $RepoPath remote set-url origin $AuthUrl 2>&1 | Out-Null
+    try {
+        git -C $RepoPath pull --quiet 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            return $false
+        }
+        return $true
+    }
+    finally {
+        git -C $RepoPath remote set-url origin $CleanUrl 2>&1 | Out-Null
+    }
+}
+
 # -- STEP 1: Self-elevate -------------------------------------------------------
 # irm|iex runs the script in-memory so $PSCommandPath is empty here.
 # Download to a real temp file first so UAC child can reference it with -File.
@@ -347,12 +387,24 @@ $authUrl  = "https://oauth2:$Token@github.com/KalibrateTechnologies/dev-setup.gi
 
 if (Test-Path (Join-Path $repoPath '.git')) {
     Write-Host '  Repo already cloned - pulling latest...' -NoNewline
-    git -C $repoPath pull --quiet 2>&1 | Out-Null
-    Write-Host ' done' -ForegroundColor Green
+    if (Update-RepoWithToken -RepoPath $repoPath -AuthUrl $authUrl -CleanUrl $cleanUrl) {
+        Write-Host ' done' -ForegroundColor Green
+    }
+    else {
+        Write-Host ' FAILED' -ForegroundColor Red
+        Write-Host '  Could not pull latest dev-setup repo. Check token access and network, then re-run.' -ForegroundColor Red
+        exit 1
+    }
 } else {
     Write-Host '  Cloning setup repo...' -NoNewline
     git clone --quiet $authUrl $repoPath 2>&1 | Out-Null
-    git -C $repoPath remote set-url origin $cleanUrl
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host ' FAILED' -ForegroundColor Red
+        Write-Host '  Could not clone dev-setup repo. Check token access and network, then re-run.' -ForegroundColor Red
+        exit 1
+    }
+    git -C $repoPath remote set-url origin $cleanUrl 2>&1 | Out-Null
+    Ensure-GitSafeDirectory -RepoPath $repoPath
     Write-Host ' done' -ForegroundColor Green
 }
 
