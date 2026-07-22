@@ -7,7 +7,10 @@ param(
     [switch]$SkipVSCodeExtensions,
     [switch]$SkipNpmGlobals,
     [switch]$SkipAzureAuth,
-    [switch]$IncludeVS
+    [switch]$IncludeVS,
+    [switch]$BootstrapAdminPrereqs,
+    [switch]$BootstrapRunSetup,
+    [string]$RepoPathOverride
 )
 # !! PS5.1 COMPATIBLE !! -- no ?., no &&/||, no ternary ?:
 # Flow:
@@ -35,10 +38,21 @@ function Start-BootstrapTranscript {
     Write-Host "  Transcript: $logPath" -ForegroundColor DarkGray
 }
 
-# Build switch-forwarding string. Called at script scope so $PSBoundParameters is the script's.
+# Build switch-forwarding string for public switches only.
 $switchArgs = ''
-foreach ($k in $PSBoundParameters.Keys) {
-    if ($PSBoundParameters[$k] -is [switch] -and $PSBoundParameters[$k].IsPresent) {
+$publicSwitches = @(
+    'SkipPackages',
+    'SkipNetFx',
+    'SkipDotNetWorkloads',
+    'SkipDotNetTools',
+    'SkipAzureExtensions',
+    'SkipVSCodeExtensions',
+    'SkipNpmGlobals',
+    'SkipAzureAuth',
+    'IncludeVS'
+)
+foreach ($k in $publicSwitches) {
+    if ($PSBoundParameters.ContainsKey($k) -and ($PSBoundParameters[$k] -is [switch]) -and $PSBoundParameters[$k].IsPresent) {
         $switchArgs += " -$k"
     }
 }
@@ -270,12 +284,6 @@ function Ensure-GitSafeDirectory {
     if (-not ($globalSafe | Where-Object { $_ -eq $RepoPath })) {
         git config --global --add safe.directory $RepoPath 2>$null | Out-Null
     }
-
-    # System-wide (covers other local users on the machine and avoids dubious ownership)
-    $systemSafe = git config --system --get-all safe.directory 2>$null
-    if (-not ($systemSafe | Where-Object { $_ -eq $RepoPath })) {
-        git config --system --add safe.directory $RepoPath 2>$null | Out-Null
-    }
 }
 
 function Update-RepoWithToken {
@@ -302,59 +310,95 @@ function Update-RepoWithToken {
     }
 }
 
-# -- STEP 1: Self-elevate -------------------------------------------------------
-# irm|iex runs the script in-memory so $PSCommandPath is empty here.
-# Download to a real temp file first so UAC child can reference it with -File.
+# -- Flow control ---------------------------------------------------------------
+$repoPath = if ($RepoPathOverride) { $RepoPathOverride } else { 'C:\dev-setup' }
+$cleanUrl = 'https://github.com/KalibrateTechnologies/dev-setup.git'
 
-$me = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
-if (-not $me.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+# irm|iex runs the script in-memory so $PSCommandPath is empty here.
+# Download to a real temp file first so child processes can reference it with -File.
+if (-not (Test-Path $TmpScript)) {
     Invoke-WebRequest -Uri $ScriptUrl -UseBasicParsing -OutFile $TmpScript
-    # Always use powershell.exe here -- pwsh may not be installed yet on a new machine
-    Start-Process powershell.exe -Verb RunAs -ArgumentList "-NoExit -ExecutionPolicy Bypass -File `"$TmpScript`"$switchArgs"
-    return
 }
 
-# -- STEP 2: Install PS7 and re-launch in it (still in elevated PS5) ------------
+if ($BootstrapAdminPrereqs) {
+    Write-Host ''
+    Write-Host '  Setting up prerequisites...' -ForegroundColor Cyan
+    Write-Host ''
 
-Write-Host ''
-Write-Host '  Setting up prerequisites...' -ForegroundColor Cyan
-Write-Host ''
+    Repair-WinGetPackageManagerBootstrap
 
-Repair-WinGetPackageManagerBootstrap
-
-if ($PSVersionTable.PSVersion.Major -lt 7) {
-
-    $pwsh7 = Find-Pwsh7
-
-    if (-not $pwsh7) {
-        Install-PowerShell7Direct
-        $pwsh7 = Find-Pwsh7
-        if ($pwsh7) {
-            Write-Host '  PowerShell 7 installed' -ForegroundColor Green
-        } else {
-            Write-Host ' FAILED (not found on PATH after install)' -ForegroundColor Red
-            Write-Host '  Install PowerShell 7 manually from https://aka.ms/powershell then re-run.' -ForegroundColor Red
-            exit 1
-        }
-    } else {
-        Write-Host '  PowerShell 7: already installed' -ForegroundColor DarkGray
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+        Install-GitDirect
+        Refresh-Path
     }
 
-    Write-Host '  Re-launching in PowerShell 7...' -ForegroundColor Cyan
-    # Already elevated -- child inherits the elevated token, no -Verb RunAs needed.
-    # $PSCommandPath is the temp file we're running from (set because we used -File above).
-    Start-Process $pwsh7 -ArgumentList "-NoExit -ExecutionPolicy Bypass -File `"$PSCommandPath`"$switchArgs" -Wait
+    if (-not (Find-Pwsh7)) {
+        Install-PowerShell7Direct
+        Refresh-Path
+    }
+
     return
 }
 
-# -- STEP 3: Token (now running in PS7 -- normal console, Read-Host works fine) -
+if ($BootstrapRunSetup) {
+    if ($PSVersionTable.PSVersion.Major -lt 7) {
+        $pwsh7 = Find-Pwsh7
+        if (-not $pwsh7) {
+            Write-Host ' FAILED (PowerShell 7 not found after prerequisite stage)' -ForegroundColor Red
+            exit 1
+        }
+
+        Write-Host '  Re-launching in PowerShell 7...' -ForegroundColor Cyan
+        Start-Process $pwsh7 -ArgumentList "-NoExit -ExecutionPolicy Bypass -File `"$PSCommandPath`" -BootstrapRunSetup -RepoPathOverride `"$repoPath`"$switchArgs" -Wait
+        return
+    }
+
+    Write-Host ''
+    Write-Host '  Dev environment setup' -ForegroundColor Cyan
+    Write-Host ''
+    Start-BootstrapTranscript
+
+    Set-ExecutionPolicy Bypass -Scope Process -Force
+    $setupArgs = @{}
+    foreach ($k in $publicSwitches) {
+        if ($PSBoundParameters.ContainsKey($k)) {
+            $setupArgs[$k] = $PSBoundParameters[$k]
+        }
+    }
+
+    & (Join-Path $repoPath 'setup.ps1') @setupArgs
+    return
+}
+
+$me = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
+
+if ($me.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Write-Host '  This bootstrap is intended to be started from a normal PowerShell window.' -ForegroundColor Yellow
+    Write-Host '  Repo clone/pull should happen as the signed-in user so repo ownership stays correct.' -ForegroundColor Yellow
+    Write-Host '  Re-run the bootstrap from a non-elevated shell.' -ForegroundColor Yellow
+    return
+}
+
+if (-not (Get-Command git -ErrorAction SilentlyContinue) -or -not (Find-Pwsh7) -or -not (Get-WingetPath)) {
+    Start-Process powershell.exe -Verb RunAs -ArgumentList "-NoExit -ExecutionPolicy Bypass -File `"$TmpScript`" -BootstrapAdminPrereqs$switchArgs" -Wait
+    Refresh-Path
+}
+
+if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+    Write-Host ' FAILED' -ForegroundColor Red
+    Write-Host '  git is still not available after prerequisite stage. Install git manually from https://git-scm.com then re-run.' -ForegroundColor Red
+    exit 1
+}
+
+if (-not (Find-Pwsh7)) {
+    Write-Host ' FAILED' -ForegroundColor Red
+    Write-Host '  PowerShell 7 is still not available after prerequisite stage. Install it manually from https://aka.ms/powershell then re-run.' -ForegroundColor Red
+    exit 1
+}
 
 Write-Host ''
 Write-Host '  Dev environment setup' -ForegroundColor Cyan
 Write-Host ''
-
-Start-BootstrapTranscript
-
 Write-Host '  A GitHub access token is needed to clone the setup repo.' -ForegroundColor Cyan
 Write-Host '  Opening your browser...' -ForegroundColor Cyan
 Start-Process 'https://github.com/settings/tokens/new?scopes=repo&description=Dev+Setup+Bootstrap'
@@ -362,27 +406,6 @@ Write-Host ''
 Write-Host '  Set an expiry, leave "repo" ticked, click Generate token, copy it.' -ForegroundColor Cyan
 $Token = (Read-Host '  Paste token here').Trim()
 
-# -- STEP 4: Install git --------------------------------------------------------
-
-if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
-    Install-GitDirect
-    $env:Path = [System.Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' +
-                [System.Environment]::GetEnvironmentVariable('Path', 'User')
-    if (Get-Command git -ErrorAction SilentlyContinue) {
-        Write-Host ' done' -ForegroundColor Green
-    } else {
-        Write-Host ' FAILED' -ForegroundColor Red
-        Write-Host '  Install git manually from https://git-scm.com then re-run.' -ForegroundColor Red
-        exit 1
-    }
-} else {
-    Write-Host '  git: already installed' -ForegroundColor DarkGray
-}
-
-# -- STEP 5: Clone --------------------------------------------------------------
-
-$repoPath = 'C:\dev-setup'
-$cleanUrl = 'https://github.com/KalibrateTechnologies/dev-setup.git'
 $authUrl  = "https://oauth2:$Token@github.com/KalibrateTechnologies/dev-setup.git"
 
 if (Test-Path (Join-Path $repoPath '.git')) {
@@ -395,7 +418,8 @@ if (Test-Path (Join-Path $repoPath '.git')) {
         Write-Host '  Could not pull latest dev-setup repo. Check token access and network, then re-run.' -ForegroundColor Red
         exit 1
     }
-} else {
+}
+else {
     Write-Host '  Cloning setup repo...' -NoNewline
     git clone --quiet $authUrl $repoPath 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) {
@@ -408,13 +432,4 @@ if (Test-Path (Join-Path $repoPath '.git')) {
     Write-Host ' done' -ForegroundColor Green
 }
 
-# -- STEP 6: Run setup ----------------------------------------------------------
-
-Set-ExecutionPolicy Bypass -Scope Process -Force
-
-$setupArgs = @{}
-foreach ($k in $PSBoundParameters.Keys) {
-    $setupArgs[$k] = $PSBoundParameters[$k]
-}
-
-& (Join-Path $repoPath 'setup.ps1') @setupArgs
+Start-Process powershell.exe -Verb RunAs -ArgumentList "-NoExit -ExecutionPolicy Bypass -File `"$TmpScript`" -BootstrapRunSetup -RepoPathOverride `"$repoPath`"$switchArgs"
