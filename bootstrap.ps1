@@ -77,6 +77,21 @@ function Refresh-Path {
                 [System.Environment]::GetEnvironmentVariable('Path', 'User')
 }
 
+function Ensure-UsableWorkingDirectory {
+    try {
+        $cwd = (Get-Location).Path
+        if ($cwd -and (Test-Path $cwd)) {
+            return
+        }
+    }
+    catch {
+        # Current directory is invalid; reset below.
+    }
+
+    $fallback = if (Test-Path "$env:SystemDrive\") { "$env:SystemDrive\" } else { $env:TEMP }
+    Set-Location $fallback
+}
+
 function Ensure-AppInstallerDirect {
     if (Get-WingetPath) { return }
 
@@ -293,6 +308,7 @@ function Update-RepoWithToken {
         [Parameter(Mandatory = $true)][string]$CleanUrl
     )
 
+    Ensure-UsableWorkingDirectory
     Ensure-GitSafeDirectory -RepoPath $RepoPath
 
     # Use token-auth remote for this update to avoid browser/device login prompts,
@@ -395,6 +411,8 @@ if (-not (Find-Pwsh7)) {
     Write-Host '  PowerShell 7 is still not available after prerequisite stage. Install it manually from https://aka.ms/powershell then re-run.' -ForegroundColor Red
     exit 1
 }
+
+Ensure-UsableWorkingDirectory
 
 Write-Host ''
 Write-Host '  Dev environment setup' -ForegroundColor Cyan
