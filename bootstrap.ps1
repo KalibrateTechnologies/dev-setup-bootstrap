@@ -63,6 +63,58 @@ function Refresh-Path {
                 [System.Environment]::GetEnvironmentVariable('Path', 'User')
 }
 
+function Ensure-AppInstallerDirect {
+    if (Get-WingetPath) { return }
+
+    $repo = 'microsoft/winget-cli'
+    $apiUrl = "https://api.github.com/repos/$repo/releases/latest"
+    $headers = @{ 'User-Agent' = 'dev-setup-bootstrap' }
+    $release = Invoke-RestMethod -Uri $apiUrl -Headers $headers -ErrorAction Stop
+
+    $bundle = $release.assets |
+        Where-Object { $_.name -eq 'Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle' } |
+        Select-Object -First 1
+
+    if (-not $bundle -or -not $bundle.browser_download_url) {
+        Write-Host '  FAILED (could not locate the App Installer msixbundle asset)' -ForegroundColor Red
+        exit 1
+    }
+
+    $bundlePath = Join-Path $env:TEMP $bundle.name
+
+    try {
+        Write-Host '  Downloading App Installer...' -NoNewline
+        Invoke-WebRequest -Uri $bundle.browser_download_url -OutFile $bundlePath -UseBasicParsing -ErrorAction Stop
+        Write-Host ' done' -ForegroundColor Green
+
+        Write-Host '  Installing App Installer...' -NoNewline
+        $proc = Start-Process powershell.exe -ArgumentList @(
+            '-NoLogo',
+            '-NoProfile',
+            '-ExecutionPolicy', 'Bypass',
+            '-Command',
+            "Add-AppxPackage -Path `"$bundlePath`" -ErrorAction Stop"
+        ) -Wait -PassThru -NoNewWindow
+
+        if ($proc.ExitCode -eq 0) {
+            Write-Host ' done' -ForegroundColor Green
+        }
+        else {
+            Write-Host " failed (exit code $($proc.ExitCode))" -ForegroundColor Red
+            exit $proc.ExitCode
+        }
+    }
+    finally {
+        Remove-Item $bundlePath -ErrorAction SilentlyContinue
+    }
+
+    Refresh-Path
+    if (-not (Get-WingetPath)) {
+        Write-Host '  FAILED (winget still not available after App Installer install)' -ForegroundColor Red
+        exit 1
+    }
+}
+
 function Get-WingetPath {
     Refresh-Path
 
@@ -137,26 +189,7 @@ function Install-WinGetClientModule {
 }
 
 function Repair-WinGetPackageManagerBootstrap {
-    Install-NuGetProvider
-    Install-WinGetClientModule
-    Import-Module 'Microsoft.WinGet.Client' -Force -ErrorAction Stop
-
-    $repairParams = @{ Force = $true; Latest = $true }
-    try {
-        Repair-WinGetPackageManager @repairParams -ErrorAction Stop | Out-Null
-    }
-    catch {
-        Write-Host '  Winget repair reported an error; checking whether installation completed anyway...' -ForegroundColor DarkGray
-    }
-
-    Start-Sleep -Seconds 3
-    Refresh-Path
-
-    if (-not (Get-WingetPath)) {
-        Write-Host '  FAILED (winget not available after Repair-WinGetPackageManager)' -ForegroundColor Red
-        Write-Host '  Install App Installer manually, then re-run.' -ForegroundColor Red
-        exit 1
-    }
+    Ensure-AppInstallerDirect
 }
 
 function Install-PowerShell7Direct {
