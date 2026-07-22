@@ -45,8 +45,7 @@ foreach ($k in $PSBoundParameters.Keys) {
 
 function Find-Pwsh7 {
     # Refresh PATH first so a just-installed pwsh is discoverable
-    $env:Path = [System.Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' +
-                [System.Environment]::GetEnvironmentVariable('Path', 'User')
+    Refresh-Path
 
     # Try PATH first (covers both MSI and MSIX installs)
     $cmd = Get-Command pwsh -ErrorAction SilentlyContinue
@@ -57,6 +56,29 @@ function Find-Pwsh7 {
     if (Test-Path $msi) { return $msi }
 
     return $null
+}
+
+function Refresh-Path {
+    $env:Path = [System.Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' +
+                [System.Environment]::GetEnvironmentVariable('Path', 'User')
+}
+
+function Assert-Winget {
+    Refresh-Path
+
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+        return
+    }
+
+    # On some fresh machines / new admin profiles, the App Installer alias is not yet registered.
+    Add-AppxPackage -RegisterByFamilyName -MainPackage Microsoft.DesktopAppInstaller_8wekyb3d8bbwe -ErrorAction SilentlyContinue
+    Refresh-Path
+
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+        Write-Host '  FAILED (winget not available after refreshing App Installer)' -ForegroundColor Red
+        Write-Host '  Install App Installer from the Microsoft Store, then re-run.' -ForegroundColor Red
+        exit 1
+    }
 }
 
 # -- STEP 1: Self-elevate -------------------------------------------------------
@@ -76,6 +98,8 @@ if (-not $me.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
 Write-Host ''
 Write-Host '  Setting up prerequisites...' -ForegroundColor Cyan
 Write-Host ''
+
+Assert-Winget
 
 if ($PSVersionTable.PSVersion.Major -lt 7) {
 
