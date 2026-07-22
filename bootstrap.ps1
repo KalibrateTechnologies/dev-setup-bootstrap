@@ -159,6 +159,39 @@ function Repair-WinGetPackageManagerBootstrap {
     }
 }
 
+function Install-PowerShell7Direct {
+    $psVersion = '7.6.4'
+    $msiUrl = "https://github.com/PowerShell/PowerShell/releases/download/v$psVersion/PowerShell-$psVersion-win-x64.msi"
+    $msiPath = Join-Path $env:TEMP "PowerShell-$psVersion-win-x64.msi"
+
+    try {
+        Write-Host "  Downloading PowerShell $psVersion installer..." -NoNewline
+        Invoke-WebRequest -Uri $msiUrl -OutFile $msiPath -UseBasicParsing -ErrorAction Stop
+        Write-Host ' done' -ForegroundColor Green
+
+        Write-Host '  Installing PowerShell 7...' -NoNewline
+        $args = @(
+            '/i', "`"$msiPath`"",
+            '/qn',
+            '/norestart',
+            'ADD_EXPLORER_CONTEXT_MENU_OPENPOWERSHELL=1',
+            'ENABLE_PSREMOTING=0',
+            'REGISTER_MANIFEST=1'
+        ) -join ' '
+        $proc = Start-Process msiexec.exe -ArgumentList $args -Wait -PassThru -NoNewWindow
+        if ($proc.ExitCode -eq 0) {
+            Write-Host ' done' -ForegroundColor Green
+        }
+        else {
+            Write-Host " failed (exit code $($proc.ExitCode))" -ForegroundColor Red
+            exit $proc.ExitCode
+        }
+    }
+    finally {
+        Remove-Item $msiPath -ErrorAction SilentlyContinue
+    }
+}
+
 # -- STEP 1: Self-elevate -------------------------------------------------------
 # irm|iex runs the script in-memory so $PSCommandPath is empty here.
 # Download to a real temp file first so UAC child can reference it with -File.
@@ -184,11 +217,10 @@ if ($PSVersionTable.PSVersion.Major -lt 7) {
     $pwsh7 = Find-Pwsh7
 
     if (-not $pwsh7) {
-        Write-Host '  Installing PowerShell 7...' -NoNewline
-        Invoke-Winget @('install', '--source', 'winget', '--id', 'Microsoft.PowerShell', '--silent', '--accept-package-agreements', '--accept-source-agreements')
+        Install-PowerShell7Direct
         $pwsh7 = Find-Pwsh7
         if ($pwsh7) {
-            Write-Host ' done' -ForegroundColor Green
+            Write-Host '  PowerShell 7 installed' -ForegroundColor Green
         } else {
             Write-Host ' FAILED (not found on PATH after install)' -ForegroundColor Red
             Write-Host '  Install PowerShell 7 manually from https://aka.ms/powershell then re-run.' -ForegroundColor Red
