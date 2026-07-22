@@ -63,12 +63,41 @@ function Refresh-Path {
                 [System.Environment]::GetEnvironmentVariable('Path', 'User')
 }
 
-function Assert-Winget {
+function Get-WingetPath {
     Refresh-Path
 
-    if (Get-Command winget -ErrorAction SilentlyContinue) {
-        return
+    $cmd = Get-Command winget -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
+
+    $appInstaller = Get-AppxPackage -Name Microsoft.DesktopAppInstaller -ErrorAction SilentlyContinue
+    if ($appInstaller -and $appInstaller.InstallLocation) {
+        $wingetExe = Join-Path $appInstaller.InstallLocation 'winget.exe'
+        if (Test-Path $wingetExe) { return $wingetExe }
     }
+
+    return $null
+}
+
+function Invoke-Winget {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$Arguments
+    )
+
+    $wingetExe = Get-WingetPath
+    if (-not $wingetExe) { Assert-Winget }
+    $wingetExe = Get-WingetPath
+    if (-not $wingetExe) {
+        Write-Host '  FAILED (winget could not be located after installing App Installer)' -ForegroundColor Red
+        Write-Host '  Install App Installer from the Microsoft Store, then re-run.' -ForegroundColor Red
+        exit 1
+    }
+
+    & $wingetExe @Arguments
+}
+
+function Assert-Winget {
+    if (Get-WingetPath) { return }
 
     # On some fresh machines / new admin profiles, the App Installer alias is not yet registered.
     $appInstaller = Get-AppxPackage -Name Microsoft.DesktopAppInstaller -ErrorAction SilentlyContinue
@@ -86,9 +115,7 @@ function Assert-Winget {
         }
     }
 
-    Refresh-Path
-
-    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+    if (-not (Get-WingetPath)) {
         Write-Host '  FAILED (winget not available after refreshing App Installer)' -ForegroundColor Red
         Write-Host '  Install App Installer from the Microsoft Store, then re-run.' -ForegroundColor Red
         exit 1
@@ -121,7 +148,7 @@ if ($PSVersionTable.PSVersion.Major -lt 7) {
 
     if (-not $pwsh7) {
         Write-Host '  Installing PowerShell 7...' -NoNewline
-        winget install --id Microsoft.PowerShell --silent --accept-package-agreements --accept-source-agreements
+        Invoke-Winget @('install', '--id', 'Microsoft.PowerShell', '--silent', '--accept-package-agreements', '--accept-source-agreements')
         $pwsh7 = Find-Pwsh7
         if ($pwsh7) {
             Write-Host ' done' -ForegroundColor Green
@@ -160,7 +187,7 @@ $Token = (Read-Host '  Paste token here').Trim()
 
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
     Write-Host '  Installing git...' -NoNewline
-    winget install --id Git.Git --silent --accept-package-agreements --accept-source-agreements | Out-Null
+    Invoke-Winget @('install', '--id', 'Git.Git', '--silent', '--accept-package-agreements', '--accept-source-agreements') | Out-Null
     $env:Path = [System.Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' +
                 [System.Environment]::GetEnvironmentVariable('Path', 'User')
     if (Get-Command git -ErrorAction SilentlyContinue) {
