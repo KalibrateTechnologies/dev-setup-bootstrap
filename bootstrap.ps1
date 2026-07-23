@@ -497,4 +497,9 @@ foreach ($k in $publicSwitches) {
 }
 if (-not $IncludeVS) { $orchArgs += '-SkipVS' }
 
-& $pwsh7 @orchArgs
+# Use Start-Process -NoNewWindow -Wait rather than & so that pwsh7 runs in
+# this same console window and blocks the parent. Calling & with a Store-stub
+# pwsh.exe (%LOCALAPPDATA%\Microsoft\WindowsApps\pwsh.exe) launches PS7 as a
+# detached window and returns immediately, causing the BAU phase to silently
+# disappear when that window closes.
+Start-Process -FilePath $pwsh7 -ArgumentList $orchArgs -NoNewWindow -Wait
