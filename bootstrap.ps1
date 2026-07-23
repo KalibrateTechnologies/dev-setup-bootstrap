@@ -429,11 +429,16 @@ Ensure-UsableWorkingDirectory
 Write-Host ''
 Write-Host '  Dev environment setup' -ForegroundColor Cyan
 Write-Host ''
-Write-Host '  A GitHub access token is needed to clone the setup repo.' -ForegroundColor Cyan
+Write-Host '  A GitHub access token is needed to clone the setup repo and authenticate gh CLI.' -ForegroundColor Cyan
 Write-Host '  Opening your browser...' -ForegroundColor Cyan
-Start-Process 'https://github.com/settings/tokens/new?scopes=repo&description=Dev+Setup+Bootstrap'
+# Scopes pre-selected in the URL:
+#   repo       - clone/pull private repos (required)
+#   read:org   - gh CLI needs this to list org repos and check membership
+#   read:user  - gh CLI user identity / profile lookups
+Start-Process 'https://github.com/settings/tokens/new?scopes=repo,read:org,read:user&description=Dev+Setup+Bootstrap'
 Write-Host ''
-Write-Host '  Set an expiry, leave "repo" ticked, click Generate token, copy it.' -ForegroundColor Cyan
+Write-Host '  All required scopes are pre-ticked (repo, read:org, read:user).' -ForegroundColor Cyan
+Write-Host '  Set an expiry, click Generate token, copy it.' -ForegroundColor Cyan
 $Token = (Read-Host '  Paste token here').Trim()
 
 $authUrl  = "https://oauth2:$Token@github.com/KalibrateTechnologies/dev-setup.git"
